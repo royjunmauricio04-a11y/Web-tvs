@@ -1,64 +1,57 @@
-/* TVS static server: serves the built app (dist/) with SPA routing.
-   Usage:
-     npm run build
-     npm run serve            (http://localhost:8080)
-     PORT=3000 npm run serve  (custom port)
-   No dependencies: plain Node.js http server. */
-
+/* TVS static server: zero dependencies, serves the built app with SPA fallback. */
 import http from "node:http";
-import { readFile } from "node:fs/promises";
-import { extname, join, normalize } from "node:path";
+import fs from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const __dirname = fileURLToPath(new URL(".", import.meta.url));
-const DIST = join(__dirname, "dist");
-const PORT = Number(process.env.PORT) || 8080;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.join(__dirname, "dist");
+const PORT = process.env.PORT || 3000;
 
-const MIME = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
+const TYPES = {
+  ".html": "text/html",
+  ".js": "text/javascript",
+  ".mjs": "text/javascript",
+  ".css": "text/css",
+  ".json": "application/json",
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
   ".ico": "image/x-icon",
-  ".woff": "font/woff",
   ".woff2": "font/woff2",
-  ".map": "application/json",
   ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".txt": "text/plain",
 };
 
-const server = http.createServer(async (req, res) => {
-  try {
-    let urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
-    if (urlPath.endsWith("/")) urlPath += "index.html";
-    const filePath = normalize(join(DIST, urlPath));
-    if (!filePath.startsWith(normalize(DIST))) {
-      res.writeHead(403);
-      res.end("Forbidden");
+const server = http.createServer((req, res) => {
+  let urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
+  if (urlPath === "/") urlPath = "/index.html";
+  let file = path.normalize(path.join(ROOT, urlPath));
+  if (!file.startsWith(ROOT)) {
+    res.writeHead(403);
+    res.end("Forbidden");
+    return;
+  }
+  if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+    file = path.join(ROOT, "index.html");
+  }
+  fs.readFile(file, (err, data) => {
+    if (err) {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not found. Run `npm run build` first.");
       return;
     }
-    let data;
-    let servedPath = filePath;
-    try {
-      data = await readFile(filePath);
-    } catch {
-      // SPA fallback: unknown routes go to index.html so React Router can handle them
-      servedPath = join(DIST, "index.html");
-      data = await readFile(servedPath);
-    }
-    const type = MIME[extname(servedPath).toLowerCase()] || "application/octet-stream";
-    res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-cache" });
+    res.writeHead(200, {
+      "Content-Type": TYPES[path.extname(file).toLowerCase()] || "application/octet-stream",
+    });
     res.end(data);
-  } catch {
-    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-    res.end("Not found. Did you run `npm run build` first?");
-  }
+  });
 });
 
 server.listen(PORT, () => {
-  console.log(`TVS server running at http://localhost:${PORT}`);
-  console.log("Serving ./dist (run `npm run build` first). Press Ctrl+C to stop.");
+  console.log(`TVS running at http://localhost:${PORT} (serving ./dist)`);
 });

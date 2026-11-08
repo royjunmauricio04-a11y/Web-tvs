@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useContext, createContext, useCallback } from "react";
-import { Routes, Route, Link, useNavigate, useParams, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Link, useNavigate, useParams, useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, Home, Play, Pause, Volume2, VolumeX, Maximize2, Minimize2, Star, Calendar, ChevronRight, X, RotateCcw, RotateCw, ArrowLeft, Bookmark, Clapperboard } from "lucide-react";
+import { Search, Home, Play, Pause, Volume2, VolumeX, Maximize, Minimize, Star, Calendar, ChevronRight, ChevronLeft, X, RotateCcw, RotateCw, ArrowLeft, Bookmark, Clapperboard } from "lucide-react";
 
 /* ============================================================
    TVS - multi-catalog viewer (web tribute to the DAVY app)
@@ -492,6 +492,15 @@ function useWatchlist() {
   return useContext(WatchlistCtx);
 }
 
+/* ---------- watch history (continue watching) ---------- */
+function loadHistory() {
+  try { return JSON.parse(store.get("tvs-history") || "[]"); } catch { return []; }
+}
+const HistoryCtx = createContext(null);
+function useHistory() {
+  return useContext(HistoryCtx);
+}
+
 const store = {
   get(k) { try { return window.localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { window.localStorage.setItem(k, v); } catch { /* ignore */ } },
@@ -523,8 +532,8 @@ function MediaCard({ item }) {
   const img = artFor(item);
   const saved = wl.has(item.catalog, item.id);
   return (
-    <div className="group relative cursor-pointer" onClick={() => navigate(`/m/${item.catalog}/${item.id}`)}>
-      <div className="relative aspect-[2/3] overflow-hidden rounded-xl bg-slate-800 ring-1 ring-white/10 transition-all duration-200 group-hover:ring-violet-500/60 group-hover:shadow-lg group-hover:shadow-violet-900/40">
+    <div className="group relative cursor-pointer transition-transform duration-200 hover:-translate-y-1" onClick={() => navigate(`/m/${item.catalog}/${item.id}`)}>
+      <div className="relative aspect-[2/3] overflow-hidden rounded-xl bg-slate-800 ring-1 ring-white/10 transition-all duration-200 group-hover:ring-violet-500/60 group-hover:shadow-xl group-hover:shadow-violet-900/50">
         <img
           src={img}
           alt={item.title}
@@ -540,10 +549,11 @@ function MediaCard({ item }) {
         >
           <Bookmark className="h-4 w-4" />
         </button>
-        <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
-          <span className="rounded-full bg-violet-600 p-4 text-white shadow-lg">
-            <Play className="h-6 w-6" />
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-gradient-to-t from-violet-950/70 via-black/30 to-transparent opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+          <span className="rounded-full bg-violet-600 p-3.5 text-white shadow-lg ring-1 ring-white/20">
+            <Play className="h-5 w-5" />
           </span>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-white/90">Watch now</span>
         </div>
       </div>
       <div className="mt-2 px-0.5">
@@ -580,6 +590,221 @@ function SkeletonGrid() {
   );
 }
 
+/* ---------- horizontal media row ---------- */
+function MediaRow({ title, items, loading }) {
+  const ref = useRef(null);
+  const scroll = (dir) => {
+    if (ref.current) ref.current.scrollBy({ left: dir * Math.max(320, ref.current.clientWidth * 0.8), behavior: "smooth" });
+  };
+  if (loading) {
+    return (
+      <section className="mb-8">
+        <div className="mb-3 h-6 w-44 animate-pulse rounded bg-slate-800/80" />
+        <div className="flex gap-4 overflow-hidden">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="w-[150px] shrink-0 sm:w-[170px]">
+              <div className="aspect-[2/3] animate-pulse rounded-xl bg-slate-800/80" />
+            </div>
+          ))}
+        </div>
+      </section>
+    );
+  }
+  if (!items || items.length === 0) return null;
+  return (
+    <section className="mb-8">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-lg font-bold text-white">{title}</h2>
+        <div className="flex gap-1.5">
+          <button onClick={() => scroll(-1)} className="rounded-full bg-slate-800/80 p-1.5 text-slate-300 ring-1 ring-white/10 transition-colors hover:bg-slate-700 hover:text-white" title="Scroll left">
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <button onClick={() => scroll(1)} className="rounded-full bg-slate-800/80 p-1.5 text-slate-300 ring-1 ring-white/10 transition-colors hover:bg-slate-700 hover:text-white" title="Scroll right">
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+      <div ref={ref} className="tvs-scroll flex gap-4 overflow-x-auto pb-2">
+        {items.map((a) => (
+          <div key={`${a.catalog}-${a.id}`} className="w-[150px] shrink-0 sm:w-[170px]">
+            <MediaCard item={a} />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/* ---------- continue watching row ---------- */
+function ContinueRow({ entries }) {
+  const navigate = useNavigate();
+  const [rows, setRows] = useState(null);
+  const list = entries || [];
+
+  useEffect(() => {
+    let alive = true;
+    if (list.length === 0) { setRows([]); return; }
+    (async () => {
+      const found = await Promise.all(list.slice(0, 10).map(async (h) => {
+        const key = keyOf(h.cat, h.id);
+        let it = knownItems.get(key) || detailCache.get(key);
+        if (!it) it = await fetchDetail(h.cat, h.id);
+        return it ? { h, it } : null;
+      }));
+      if (alive) setRows(found.filter(Boolean));
+    })();
+    return () => { alive = false; };
+  }, [entries]);
+
+  if (!rows || rows.length === 0) return null;
+  return (
+    <section className="mb-8">
+      <h2 className="mb-3 flex items-center gap-2 text-lg font-bold text-white">
+        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-violet-600/25 text-violet-300">
+          <Play className="h-3 w-3" />
+        </span>
+        Continue watching
+      </h2>
+      <div className="tvs-scroll flex gap-4 overflow-x-auto pb-2">
+        {rows.map(({ h, it }) => {
+          const img = artFor(it);
+          const pct = h.dur > 0 ? Math.min(100, Math.round((h.t / h.dur) * 100)) : 0;
+          return (
+            <button
+              key={`${h.cat}-${h.id}`}
+              onClick={() => navigate(`/watch/${h.cat}/${h.id}/${h.ep}`)}
+              className="group w-[240px] shrink-0 text-left sm:w-[260px]"
+            >
+              <div className="relative aspect-video overflow-hidden rounded-xl bg-slate-800 ring-1 ring-white/10 transition-all group-hover:ring-violet-500/60">
+                <img
+                  src={img}
+                  alt={it.title}
+                  loading="lazy"
+                  className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                  onError={(e) => { e.currentTarget.src = posterSvg(h.id, it.altTitle || it.title, h.cat); }}
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
+                <span className="absolute left-2 top-2 rounded-md bg-black/60 px-2 py-0.5 text-[10px] font-bold text-violet-200 backdrop-blur">
+                  {it.episodes > 1 ? `EP ${h.ep}` : it.type}
+                </span>
+                <span className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100">
+                  <span className="rounded-full bg-violet-600 p-3 text-white shadow-lg">
+                    <Play className="h-5 w-5" />
+                  </span>
+                </span>
+                <div className="absolute inset-x-2 bottom-2 h-1 overflow-hidden rounded-full bg-white/25">
+                  <div className="h-full rounded-full bg-violet-500" style={{ width: `${pct}%` }} />
+                </div>
+              </div>
+              <p className="mt-2 line-clamp-1 text-sm font-semibold text-slate-100 group-hover:text-violet-300">{it.title}</p>
+              <p className="text-xs text-slate-400">
+                {it.episodes > 1 ? `Episode ${h.ep}` : it.type} · resume at {fmtTime(h.t)}
+              </p>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/* ---------- hero carousel ---------- */
+function Hero({ items, loading }) {
+  const navigate = useNavigate();
+  const wl = useWatchlist();
+  const [i, setI] = useState(0);
+  const slides = (items || []).filter(Boolean).slice(0, 3);
+
+  useEffect(() => {
+    if (slides.length < 2) return;
+    const t = setInterval(() => setI((x) => (x + 1) % slides.length), 7000);
+    return () => clearInterval(t);
+  }, [slides.length]);
+
+  if (loading || slides.length === 0) {
+    return <div className="mb-6 aspect-video w-full animate-pulse rounded-3xl bg-slate-800/60 ring-1 ring-white/5" />;
+  }
+  const it = slides[i % slides.length];
+  const img = artFor(it);
+  const saved = wl.has(it.catalog, it.id);
+  const isMovie = it.catalog === "movies";
+  const cta = it.catalog === "free" ? "Watch full movie" : isMovie ? "Watch trailer" : "Watch Episode 1";
+  const label = CATALOGS.find((c) => c.id === it.catalog)?.label || "";
+
+  return (
+    <div className="relative mb-6 h-[360px] overflow-hidden rounded-3xl ring-1 ring-white/10 sm:h-[420px] md:h-[460px]">
+      <AnimatePresence>
+        <motion.div
+          key={`${it.catalog}-${it.id}`}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.5 }}
+          className="absolute inset-0"
+        >
+          <img
+            src={img}
+            alt={it.title}
+            className="h-full w-full scale-110 object-cover blur-[1px]"
+            onError={(e) => { e.currentTarget.style.opacity = "0"; }}
+          />
+          <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/70 to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-slate-950/20" />
+          <div className="absolute inset-0 flex flex-col justify-end p-6 sm:p-10">
+            <div className="max-w-2xl">
+              <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.22em] text-violet-400">Featured · {label}</p>
+              <h2 className="text-3xl font-extrabold tracking-tight text-white drop-shadow-lg sm:text-4xl md:text-5xl">{it.title}</h2>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <ScoreBadge score={it.score} />
+                <Chip>{it.type}</Chip>
+                {it.year && <Chip>{it.year}</Chip>}
+                {it.episodes > 1 && <Chip>{it.episodes} eps</Chip>}
+                {(it.genres || []).slice(0, 2).map((g) => (
+                  <span key={g} className="rounded-full bg-violet-500/20 px-3 py-1 text-xs font-medium text-violet-200 ring-1 ring-violet-500/30">{g}</span>
+                ))}
+              </div>
+              <p className="mt-3 line-clamp-2 max-w-xl text-sm text-slate-300 sm:text-base">{it.synopsis}</p>
+              <div className="mt-5 flex flex-wrap items-center gap-3">
+                <button
+                  onClick={() => navigate(`/watch/${it.catalog}/${it.id}/1`)}
+                  className="inline-flex items-center gap-2 rounded-full bg-violet-600 px-6 py-3 text-sm font-bold text-white shadow-lg shadow-violet-900/50 transition hover:bg-violet-500"
+                >
+                  <Play className="h-4 w-4" /> {cta}
+                </button>
+                <button
+                  onClick={() => navigate(`/m/${it.catalog}/${it.id}`)}
+                  className="inline-flex items-center gap-2 rounded-full bg-white/10 px-6 py-3 text-sm font-bold text-white ring-1 ring-white/20 backdrop-blur transition hover:bg-white/20"
+                >
+                  More info
+                </button>
+                <button
+                  onClick={() => wl.toggle(it.catalog, it.id)}
+                  className={`rounded-full p-3 ring-1 backdrop-blur transition ${saved ? "bg-violet-500 text-white ring-violet-400/50" : "bg-black/40 text-slate-200 ring-white/20 hover:text-white"}`}
+                  title={saved ? "Remove from watchlist" : "Add to watchlist"}
+                >
+                  <Bookmark className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      </AnimatePresence>
+      {slides.length > 1 && (
+        <div className="absolute right-6 top-6 z-10 flex gap-1.5">
+          {slides.map((s, idx) => (
+            <button
+              key={`${s.catalog}-${s.id}`}
+              onClick={() => setI(idx)}
+              className={`h-1.5 rounded-full transition-all ${idx === i % slides.length ? "w-7 bg-violet-500" : "w-2.5 bg-white/30 hover:bg-white/60"}`}
+              title={`Featured ${idx + 1}`}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OfflineNote({ show }) {
   if (!show) return null;
   return (
@@ -610,37 +835,63 @@ function HomePage() {
   const [cat, setCat] = useState("anime");
   const [seasonKey, setSeasonKey] = useState("now");
   const [list, setList] = useState(null);
+  const [extra, setExtra] = useState(null);
+  const hist = useHistory();
   const seasons = useMemo(() => recentSeasons(6), []);
   const isDrama = cat === "kdrama" || cat === "cdrama";
 
   useEffect(() => {
     let alive = true;
+    setExtra(null);
     if (isDrama) {
-      setList(cat === "kdrama" ? KDRAMAS.map((d) => DRAMA_BY_KEY.get(`kdrama:${d.id}`)) : CDRAMAS.map((d) => DRAMA_BY_KEY.get(`cdrama:${d.id}`)));
+      const all = (cat === "kdrama" ? KDRAMAS.map((d) => DRAMA_BY_KEY.get(`kdrama:${d.id}`)) : CDRAMAS.map((d) => DRAMA_BY_KEY.get(`cdrama:${d.id}`))).filter(Boolean);
+      setList(all);
+      setExtra({ title: "More picks for you", items: all.slice(6) });
       return;
     }
     setList(null);
     (async () => {
       let items = null;
       if (cat === "anime") items = await fetchSeasonal(seasonKey);
-      else if (cat === "movies" || cat === "series" || cat === "free") items = await getFeatured(cat);
-      if (alive) setList(items || []);
+      else items = await getFeatured(cat);
+      if (!alive) return;
+      items = (items || []).filter(Boolean);
+      setList(items);
+      if (cat === "anime") {
+        const top = await api("/top/anime?limit=10&sfw=true");
+        if (alive && top && Array.isArray(top.data) && top.data.length) {
+          setExtra({ title: "Top rated of all time", items: top.data.map(normAnime) });
+        }
+      } else if (items.length > 7) {
+        setExtra({ title: "More to explore", items: items.slice(6) });
+      }
     })();
     return () => { alive = false; };
   }, [cat, seasonKey, isDrama]);
 
   const meta = CATALOGS.find((c) => c.id === cat);
+  const mainTitle =
+    cat === "anime" ? `${seasons.find((s) => s.key === seasonKey)?.label || "Seasonal"} lineup`
+      : cat === "movies" ? "Featured movies"
+      : cat === "series" ? "Featured series"
+      : cat === "free" ? "Public domain full movies"
+      : cat === "kdrama" ? "Korean dramas"
+      : "Chinese dramas";
 
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-white">Browse</h1>
-        <p className="mt-1 text-sm text-slate-400">Pick a catalog and start watching: {meta?.blurb}.</p>
+      <div className="mb-5">
+        <h1 className="text-2xl font-extrabold tracking-tight text-white sm:text-3xl">Browse</h1>
+        <p className="mt-1 text-sm text-slate-400">{meta?.blurb}</p>
       </div>
       <CatalogTabs value={cat} onChange={setCat} />
 
+      {!isDrama && <Hero items={list === null ? [] : list.slice(0, 3)} loading={list === null} />}
+
+      <ContinueRow entries={hist.list} />
+
       {cat === "anime" && (
-        <div className="mb-6 flex flex-wrap gap-2">
+        <div className="mb-3 flex flex-wrap gap-2">
           {seasons.map((s) => (
             <button
               key={s.key}
@@ -653,20 +904,8 @@ function HomePage() {
         </div>
       )}
 
-      {cat === "anime" && (
-        <h2 className="mb-3 flex items-center gap-2 text-lg font-semibold text-white">
-          <Calendar className="h-5 w-5 text-violet-400" /> {seasons.find((s) => s.key === seasonKey)?.label || "Seasonal lineup"}
-        </h2>
-      )}
-      {(cat === "movies" || cat === "series" || cat === "free") && (
-        <h2 className="mb-3 text-lg font-semibold text-white">
-          {cat === "free" ? "Public domain full movies" : cat === "movies" ? "Featured Movies" : "Featured Series"}
-        </h2>
-      )}
-      {cat === "kdrama" && <h2 className="mb-3 text-lg font-semibold text-white">Korean Dramas</h2>}
-      {cat === "cdrama" && <h2 className="mb-3 text-lg font-semibold text-white">Chinese Dramas</h2>}
-
-      {list === null ? <SkeletonGrid /> : <Grid items={list} />}
+      <MediaRow title={mainTitle} items={list || []} loading={list === null} />
+      {extra && extra.items.length > 0 && <MediaRow title={extra.title} items={extra.items} loading={false} />}
     </div>
   );
 }
@@ -730,6 +969,7 @@ function DetailPage() {
   const { cat, id } = useParams();
   const navigate = useNavigate();
   const wl = useWatchlist();
+  const hist = useHistory();
   const [item, setItem] = useState(null);
   const [eps, setEps] = useState(null);
   const [missing, setMissing] = useState(false);
@@ -815,6 +1055,18 @@ function DetailPage() {
               >
                 <Play className="h-4 w-4" /> {cta}
               </button>
+              {(() => {
+                const h = hist.get(item.catalog, item.id);
+                if (!h || !h.t || h.t < 5) return null;
+                return (
+                  <button
+                    onClick={() => navigate(`/watch/${item.catalog}/${item.id}/${h.ep}`)}
+                    className="inline-flex items-center gap-2 rounded-full bg-emerald-500/15 px-5 py-2.5 text-sm font-semibold text-emerald-200 ring-1 ring-emerald-500/40 transition-colors hover:bg-emerald-500/25"
+                  >
+                    <Play className="h-4 w-4" /> {item.episodes > 1 ? `Continue Episode ${h.ep}` : "Continue watching"} · {fmtTime(h.t)}
+                  </button>
+                );
+              })()}
               <button
                 onClick={() => wl.toggle(item.catalog, item.id)}
                 className={`inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-semibold ring-1 transition-colors ${saved ? "bg-violet-500/20 text-violet-200 ring-violet-500/50" : "bg-slate-800/70 text-slate-200 ring-white/10 hover:bg-slate-700"}`}
@@ -861,6 +1113,8 @@ function Player({ src, poster, title, epLabel, hasNext, onNext, resumeAt, onTime
   const [busy, setBusy] = useState(true);
   const [controls, setControls] = useState(true);
   const [fs, setFs] = useState(false);
+  const [rate, setRate] = useState(1);
+  const RATES = [1, 1.25, 1.5, 2, 0.75];
 
   const poke = useCallback(() => {
     setControls(true);
@@ -879,6 +1133,11 @@ function Player({ src, poster, title, epLabel, hasNext, onNext, resumeAt, onTime
     const v = vref.current;
     if (v) { v.volume = vol; v.muted = muted; }
   }, [vol, muted]);
+
+  useEffect(() => {
+    const v = vref.current;
+    if (v) v.playbackRate = rate;
+  }, [rate, src]);
 
   useEffect(() => {
     const onFs = () => setFs(Boolean(document.fullscreenElement));
@@ -934,6 +1193,7 @@ function Player({ src, poster, title, epLabel, hasNext, onNext, resumeAt, onTime
     if (!v) return;
     setDur(v.duration || 0);
     if (resumeAt && resumeAt > 2 && resumeAt < (v.duration || 0) - 2) v.currentTime = resumeAt;
+    v.playbackRate = rate;
     v.play().catch(() => { /* autoplay blocked: user presses play */ });
     poke();
   };
@@ -952,7 +1212,7 @@ function Player({ src, poster, title, epLabel, hasNext, onNext, resumeAt, onTime
         playsInline
         className="h-full w-full object-contain"
         onLoadedMetadata={onLoaded}
-        onTimeUpdate={(e) => { setCur(e.currentTarget.currentTime); if (onTime) onTime(e.currentTarget.currentTime); }}
+        onTimeUpdate={(e) => { setCur(e.currentTarget.currentTime); if (onTime) onTime(e.currentTarget.currentTime, e.currentTarget.duration || 0); }}
         onPlay={() => { setPlaying(true); setEnded(false); }}
         onPause={() => setPlaying(false)}
         onWaiting={() => setBusy(true)}
@@ -1027,6 +1287,13 @@ function Player({ src, poster, title, epLabel, hasNext, onNext, resumeAt, onTime
                 <span className="ml-1 text-xs font-medium tabular-nums text-slate-300">
                   {fmtTime(cur)} / {fmtTime(dur)}
                 </span>
+                <button
+                  onClick={() => setRate(RATES[(RATES.indexOf(rate) + 1) % RATES.length])}
+                  className="rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-bold text-white ring-1 ring-white/15 transition hover:bg-white/20"
+                  title="Playback speed"
+                >
+                  {rate}x
+                </button>
                 <div className="flex-1" />
                 {hasNext && (
                   <button onClick={onNext} className="rounded-full p-2 text-white transition-colors hover:bg-white/10" title="Next episode">
@@ -1034,7 +1301,7 @@ function Player({ src, poster, title, epLabel, hasNext, onNext, resumeAt, onTime
                   </button>
                 )}
                 <button onClick={toggleFs} className="rounded-full p-2 text-white transition-colors hover:bg-white/10" title="Fullscreen (f)">
-                  {fs ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
+                  {fs ? <Minimize className="h-5 w-5" /> : <Maximize className="h-5 w-5" />}
                 </button>
               </div>
             </div>
@@ -1078,7 +1345,15 @@ function WatchPage() {
   const [dub, setDub] = useState("SUB");
   const [iaVideo, setIaVideo] = useState(undefined);
   const timeRef = useRef(0);
+  const lastSave = useRef(0);
   const [resumeAt, setResumeAt] = useState(0);
+  const hist = useHistory();
+
+  useEffect(() => {
+    lastSave.current = 0;
+    const prior = loadHistory().find((e) => e.cat === cat && e.id === id);
+    setResumeAt(prior && Number(prior.ep) === epNum ? prior.t || 0 : 0);
+  }, [cat, id, epNum]);
 
   useEffect(() => {
     let alive = true;
@@ -1133,7 +1408,13 @@ function WatchPage() {
           hasNext={hasNext}
           onNext={() => { timeRef.current = 0; setResumeAt(0); navigate(`/watch/${item.catalog}/${item.id}/${epNum + 1}`); }}
           resumeAt={resumeAt}
-          onTime={(t) => { timeRef.current = t; }}
+          onTime={(t, d) => {
+            timeRef.current = t;
+            if (t - lastSave.current > 5 || t < lastSave.current) {
+              lastSave.current = t;
+              hist.save(cat, id, epNum, t, d);
+            }
+          }}
         />
         <div className="mt-4 flex flex-wrap items-center gap-2">
           {["SUB", "DUB"].map((d) => (
@@ -1229,11 +1510,11 @@ function NavItem({ to, icon, label, badge }) {
   return (
     <Link
       to={to}
-      className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${active ? "bg-violet-600/20 text-violet-200 ring-1 ring-violet-500/40" : "text-slate-400 hover:bg-slate-800/70 hover:text-white"}`}
+      className={`relative inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors ${active ? "bg-violet-600/20 text-violet-200 ring-1 ring-violet-500/40" : "text-slate-400 hover:bg-slate-800/70 hover:text-white"}`}
     >
       {icon}
-      <span className="hidden sm:inline">{label}</span>
-      {badge ? <span className="ml-auto rounded-full bg-violet-600 px-2 text-xs font-bold text-white">{badge}</span> : null}
+      {label ? <span>{label}</span> : null}
+      {badge ? <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-violet-600 px-1 text-[10px] font-bold text-white">{badge}</span> : null}
     </Link>
   );
 }
@@ -1243,20 +1524,44 @@ function Shell() {
   const [wlKeys, setWlKeys] = useState(() => {
     try { return new Set(JSON.parse(store.get("tvs-watchlist") || "[]")); } catch { return new Set(); }
   });
+  const [hist, setHist] = useState(loadHistory);
+  const [toasts, setToasts] = useState([]);
+  const toastId = useRef(0);
 
-  const wl = {
+  const pushToast = useCallback((msg) => {
+    const id = ++toastId.current;
+    setToasts((prev) => [...prev, { id, msg }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 2600);
+  }, []);
+
+  const wl = useMemo(() => ({
     keys: wlKeys,
     has: (cat, id) => wlKeys.has(keyOf(cat, id)),
     toggle: (cat, id) => {
-      setWlKeys((prev) => {
-        const next = new Set(prev);
-        const k = keyOf(cat, id);
-        if (next.has(k)) next.delete(k); else next.add(k);
-        store.set("tvs-watchlist", JSON.stringify(Array.from(next)));
+      const k = keyOf(cat, id);
+      const had = wlKeys.has(k);
+      const next = new Set(wlKeys);
+      if (had) next.delete(k); else next.add(k);
+      store.set("tvs-watchlist", JSON.stringify(Array.from(next)));
+      setWlKeys(next);
+      pushToast(had ? "Removed from your watchlist" : "Added to your watchlist");
+    },
+  }), [wlKeys, pushToast]);
+
+  const histApi = useMemo(() => ({
+    list: hist,
+    get: (cat, id) => hist.find((e) => e.cat === cat && e.id === id) || null,
+    save: (cat, id, ep, t, dur) => {
+      setHist((prev) => {
+        let next = prev.filter((e) => !(e.cat === cat && e.id === id));
+        const finished = dur > 0 && t >= dur - 5;
+        if (!finished && t > 5) next = [{ cat, id, ep, t, dur, at: Date.now() }, ...next];
+        next = next.slice(0, 12);
+        store.set("tvs-history", JSON.stringify(next));
         return next;
       });
     },
-  };
+  }), [hist]);
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -1264,38 +1569,51 @@ function Shell() {
 
   return (
     <WatchlistCtx.Provider value={wl}>
-      <style>{`
-        .tvs-range { -webkit-appearance: none; appearance: none; height: 4px; border-radius: 9999px; background: rgba(255,255,255,0.25); outline: none; cursor: pointer; }
-        .tvs-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 9999px; background: #8b5cf6; box-shadow: 0 0 6px rgba(139,92,246,0.7); }
-        .tvs-range::-moz-range-thumb { width: 14px; height: 14px; border: none; border-radius: 9999px; background: #8b5cf6; }
-        ::-webkit-scrollbar { width: 8px; height: 8px; }
-        ::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.3); border-radius: 9999px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        .line-clamp-2, .line-clamp-3 { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
-        .line-clamp-2 { -webkit-line-clamp: 2; }
-        .line-clamp-3 { -webkit-line-clamp: 3; }
-      `}</style>
-      <div className="min-h-screen bg-slate-950 text-slate-100">
-        <div className="mx-auto flex max-w-[1400px]">
-          <nav className="sticky top-0 hidden h-screen w-20 flex-col gap-2 border-r border-white/5 px-3 py-5 md:flex lg:w-60">
-            <Link to="/" className="mb-4 flex items-center gap-2.5 px-2">
-              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-600 text-white shadow-lg shadow-violet-900/50">
-                <Clapperboard className="h-5 w-5" />
-              </span>
-              <span className="hidden lg:block">
-                <span className="block text-lg font-extrabold tracking-tight text-white">TVS</span>
-                <span className="block text-[10px] font-medium uppercase tracking-wider text-violet-400">Anime · Movies · Drama</span>
-              </span>
-            </Link>
-            <NavItem to="/" icon={<Home className="h-5 w-5" />} label="Home" />
-            <NavItem to="/search" icon={<Search className="h-5 w-5" />} label="Search" />
-            <NavItem to="/watchlist" icon={<Bookmark className="h-5 w-5" />} label="Watchlist" badge={wlKeys.size || null} />
-            <p className="mt-auto hidden px-2 text-[10px] leading-relaxed text-slate-600 lg:block">
-              Multi-catalog viewer. Data: Jikan (MyAnimeList), iTunes Search API, and the Internet Archive. Drama catalogs are curated samples. Demo streams: Blender open movies (CC).
-            </p>
-          </nav>
+      <HistoryCtx.Provider value={histApi}>
+        <style>{`
+          .tvs-range { -webkit-appearance: none; appearance: none; height: 4px; border-radius: 9999px; background: rgba(255,255,255,0.25); outline: none; cursor: pointer; }
+          .tvs-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 9999px; background: #8b5cf6; box-shadow: 0 0 6px rgba(139,92,246,0.7); }
+          .tvs-range::-moz-range-thumb { width: 14px; height: 14px; border: none; border-radius: 9999px; background: #8b5cf6; }
+          ::-webkit-scrollbar { width: 8px; height: 8px; }
+          ::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.3); border-radius: 9999px; }
+          ::-webkit-scrollbar-track { background: transparent; }
+          .line-clamp-2, .line-clamp-3 { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+          .line-clamp-2 { -webkit-line-clamp: 2; }
+          .line-clamp-3 { -webkit-line-clamp: 3; }
+          .tvs-scroll { scrollbar-width: none; -ms-overflow-style: none; }
+          .tvs-scroll::-webkit-scrollbar { display: none; }
+        `}</style>
+        <div className="min-h-screen bg-slate-950 text-slate-100">
+          <header className="sticky top-0 z-40 border-b border-white/5 bg-slate-950/70 backdrop-blur-xl">
+            <div className="mx-auto flex h-16 max-w-[1500px] items-center gap-3 px-4 sm:px-6">
+              <Link to="/" className="flex shrink-0 items-center gap-2.5">
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-600 text-white shadow-lg shadow-violet-900/50">
+                  <Clapperboard className="h-5 w-5" />
+                </span>
+                <span>
+                  <span className="block text-lg font-extrabold leading-none tracking-tight text-white">TVS</span>
+                  <span className="block text-[9px] font-semibold uppercase tracking-[0.18em] text-violet-400">Anime · Movies · Drama</span>
+                </span>
+              </Link>
+              <nav className="ml-4 hidden items-center gap-1 md:flex">
+                <NavItem to="/" icon={<Home className="h-4 w-4" />} label="Home" />
+                <NavItem to="/search" icon={<Search className="h-4 w-4" />} label="Search" />
+                <NavItem to="/watchlist" icon={<Bookmark className="h-4 w-4" />} label="Watchlist" badge={wlKeys.size || null} />
+              </nav>
+              <div className="ml-auto flex items-center gap-2">
+                <span className="hidden rounded-full bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold text-emerald-300 ring-1 ring-emerald-500/25 lg:inline">100% legal streams</span>
+                <button
+                  onClick={() => pushToast("Tip: Space = play/pause, arrows = seek, F = fullscreen")}
+                  className="hidden rounded-full bg-slate-800/80 p-2 text-slate-300 ring-1 ring-white/10 transition-colors hover:text-white md:block"
+                  title="Player tips"
+                >
+                  <Clapperboard className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          </header>
 
-          <main className="min-w-0 flex-1 px-4 pb-24 pt-6 sm:px-6 md:pb-10">
+          <main className="mx-auto max-w-[1500px] px-4 pb-24 pt-6 sm:px-6 md:pb-12">
             <motion.div
               key={loc.pathname}
               initial={{ opacity: 0, y: 8 }}
@@ -1311,19 +1629,42 @@ function Shell() {
                 <Route path="*" element={<HomePage />} />
               </Routes>
             </motion.div>
-          </main>
-        </div>
 
-        <nav className="fixed inset-x-0 bottom-0 z-20 flex justify-around border-t border-white/10 bg-slate-950/95 py-2 backdrop-blur md:hidden">
-          <NavItem to="/" icon={<Home className="h-5 w-5" />} label="" />
-          <NavItem to="/search" icon={<Search className="h-5 w-5" />} label="" />
-          <NavItem to="/watchlist" icon={<Bookmark className="h-5 w-5" />} label="" />
-        </nav>
-      </div>
+            <footer className="mt-10 border-t border-white/5 pt-6">
+              <p className="max-w-4xl text-xs leading-relaxed text-slate-500">
+                TVS · multi-catalog viewer. Data: Jikan (MyAnimeList), iTunes Search API, and the Internet Archive. Drama catalogs are curated samples. Demo streams: Blender open movies (CC). Legal playback only, for personal use.
+              </p>
+            </footer>
+          </main>
+
+          <nav className="fixed inset-x-0 bottom-0 z-30 flex justify-around border-t border-white/10 bg-slate-950/95 py-2 backdrop-blur md:hidden">
+            <NavItem to="/" icon={<Home className="h-5 w-5" />} label="" />
+            <NavItem to="/search" icon={<Search className="h-5 w-5" />} label="" />
+            <NavItem to="/watchlist" icon={<Bookmark className="h-5 w-5" />} label="" badge={wlKeys.size || null} />
+          </nav>
+
+          <div className="pointer-events-none fixed bottom-20 right-4 z-50 flex flex-col items-end gap-2 md:bottom-6">
+            <AnimatePresence>
+              {toasts.map((t) => (
+                <motion.div
+                  key={t.id}
+                  initial={{ opacity: 0, y: 12, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  transition={{ duration: 0.18 }}
+                  className="rounded-xl bg-slate-900/95 px-4 py-2.5 text-sm font-medium text-white shadow-xl ring-1 ring-white/10 backdrop-blur"
+                >
+                  {t.msg}
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          </div>
+        </div>
+      </HistoryCtx.Provider>
     </WatchlistCtx.Provider>
   );
 }
 
 export default function App() {
-  return <Shell />;
+  return <BrowserRouter><Shell /></BrowserRouter>;
 }

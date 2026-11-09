@@ -438,6 +438,8 @@ async function searchCatalog(cat, q) {
 async function fetchDetail(cat, id) {
   const key = keyOf(cat, id);
   if (detailCache.has(key)) return detailCache.get(key);
+  const known = knownItems.get(key);
+  if (known) { detailCache.set(key, known); return known; }
   let a = null;
   if (cat === "anime") {
     const res = await api(`/anime/${id}/full`);
@@ -1028,7 +1030,7 @@ function DetailPage() {
           <img
             src={img}
             alt={item.title}
-            className="w-44 shrink-0 self-start rounded-xl object-cover shadow-xl ring-1 ring-white/10 sm:w-52"
+            className="aspect-[2/3] w-44 shrink-0 self-start rounded-xl object-cover shadow-xl ring-1 ring-white/10 sm:w-52"
             onError={(e) => { e.currentTarget.src = posterSvg(item.id, item.altTitle || item.title, item.catalog); }}
           />
           <div className="min-w-0 flex-1">
@@ -1111,6 +1113,7 @@ function Player({ src, poster, title, epLabel, hasNext, onNext, resumeAt, onTime
   const [vol, setVol] = useState(1);
   const [ended, setEnded] = useState(false);
   const [busy, setBusy] = useState(true);
+  const [vidErr, setVidErr] = useState(false);
   const [controls, setControls] = useState(true);
   const [fs, setFs] = useState(false);
   const [rate, setRate] = useState(1);
@@ -1194,7 +1197,7 @@ function Player({ src, poster, title, epLabel, hasNext, onNext, resumeAt, onTime
     setDur(v.duration || 0);
     if (resumeAt && resumeAt > 2 && resumeAt < (v.duration || 0) - 2) v.currentTime = resumeAt;
     v.playbackRate = rate;
-    v.play().catch(() => { /* autoplay blocked: user presses play */ });
+    v.play().catch(() => { setBusy(false); setControls(true); /* autoplay blocked: user presses play */ });
     poke();
   };
 
@@ -1210,8 +1213,10 @@ function Player({ src, poster, title, epLabel, hasNext, onNext, resumeAt, onTime
         src={src}
         poster={poster}
         playsInline
+        preload="auto"
         className="h-full w-full object-contain"
         onLoadedMetadata={onLoaded}
+        onError={() => { setBusy(false); setVidErr(true); }}
         onTimeUpdate={(e) => { setCur(e.currentTarget.currentTime); if (onTime) onTime(e.currentTarget.currentTime, e.currentTarget.duration || 0); }}
         onPlay={() => { setPlaying(true); setEnded(false); }}
         onPause={() => setPlaying(false)}
@@ -1222,10 +1227,25 @@ function Player({ src, poster, title, epLabel, hasNext, onNext, resumeAt, onTime
         onClick={togglePlay}
       />
 
-      {busy && !ended && (
+      {busy && !ended && !vidErr && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <div className="h-12 w-12 animate-spin rounded-full border-4 border-white/20 border-t-violet-500" />
         </div>
+      )}
+
+      {vidErr && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/80 p-6 text-center">
+          <p className="text-sm font-semibold text-white">Stream failed to load</p>
+          <p className="text-xs text-slate-400">Try a different server below, or check your connection.</p>
+        </div>
+      )}
+
+      {controls && !playing && !busy && !ended && !vidErr && (
+        <button onClick={togglePlay} className="absolute inset-x-0 bottom-24 top-0 flex items-center justify-center" title="Play">
+          <span className="rounded-full bg-violet-600/90 p-5 text-white shadow-xl ring-1 ring-white/20 backdrop-blur">
+            <Play className="h-8 w-8" />
+          </span>
+        </button>
       )}
 
       <AnimatePresence>
@@ -1344,6 +1364,7 @@ function WatchPage() {
   const [srcId, setSrcId] = useState(null);
   const [dub, setDub] = useState("SUB");
   const [iaVideo, setIaVideo] = useState(undefined);
+  const [missing, setMissing] = useState(false);
   const timeRef = useRef(0);
   const lastSave = useRef(0);
   const [resumeAt, setResumeAt] = useState(0);
@@ -1357,25 +1378,43 @@ function WatchPage() {
 
   useEffect(() => {
     let alive = true;
-    setItem(null); setEps(null); setResumeAt(0); timeRef.current = 0; setSrcId(null); setIaVideo(undefined);
+    setItem(null); setEps(null); setResumeAt(0); timeRef.current = 0; setSrcId(null); setIaVideo(undefined); setMissing(false);
     (async () => {
-      const a = await fetchDetail(cat, id);
-      if (!alive || !a) return;
+      const free = cat === "free";
+      const [a, url] = await Promise.all([
+        fetchDetail(cat, id),
+        free ? fetchIAVideo(id) : Promise.resolve(null),
+      ]);
+      if (!alive) return;
+      if (!a) { setMissing(true); return; }
       setItem(a);
-      if (cat === "free") {
-        const url = await fetchIAVideo(id);
-        if (!alive) return;
-        setIaVideo(url);
-        setSrcId(url ? "archive" : DEMO_SOURCES[0].id);
-      } else {
-        setIaVideo(null);
-        setSrcId(a.video ? "trailer" : DEMO_SOURCES[0].id);
-      }
+      setIaVideo(free ? url : null);
+      setSrcId(free ? (url ? "archive" : DEMO_SOURCES[0].id) : a.video ? "trailer" : DEMO_SOURCES[0].id);
       const list = await fetchEpisodes(cat, id, a);
       if (alive) setEps(list);
     })();
     return () => { alive = false; };
   }, [cat, id]);
+
+  const histRef = useRef(hist);
+  histRef.current = hist;
+  useEffect(() => {
+    return () => {
+      const t = timeRef.current;
+      if (t > 5) histRef.current.save(cat, id, epNum, t, 0);
+    };
+  }, [cat, id, epNum]);
+
+  if (missing) {
+    return (
+      <div>
+        <button onClick={() => navigate(-1)} className="mb-4 inline-flex items-center gap-1.5 text-sm text-slate-400 hover:text-white">
+          <ArrowLeft className="h-4 w-4" /> Back
+        </button>
+        <p className="text-sm text-slate-400">This title could not be loaded. It may have been removed from the catalog.</p>
+      </div>
+    );
+  }
 
   if (!item || !eps || (cat === "free" && iaVideo === undefined)) {
     return (
@@ -1553,9 +1592,11 @@ function Shell() {
     get: (cat, id) => hist.find((e) => e.cat === cat && e.id === id) || null,
     save: (cat, id, ep, t, dur) => {
       setHist((prev) => {
+        const old = prev.find((e) => e.cat === cat && e.id === id);
+        const d = dur > 0 ? dur : (old ? old.dur : 0);
         let next = prev.filter((e) => !(e.cat === cat && e.id === id));
-        const finished = dur > 0 && t >= dur - 5;
-        if (!finished && t > 5) next = [{ cat, id, ep, t, dur, at: Date.now() }, ...next];
+        const finished = d > 0 && t >= d - 5;
+        if (!finished && t > 5) next = [{ cat, id, ep, t, dur: d, at: Date.now() }, ...next];
         next = next.slice(0, 12);
         store.set("tvs-history", JSON.stringify(next));
         return next;

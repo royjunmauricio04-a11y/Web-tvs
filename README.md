@@ -24,6 +24,8 @@ A modern, multi-catalog streaming hub for the web: a tribute to the DAVY mobile 
 - Watchlist with toast notifications
 - Custom video player: playback speed (0.75x to 2x), skip 10s, volume, fullscreen, keyboard shortcuts
 - Search across all six catalogs
+- Instant page loads: detail and watch pages reuse data you already fetched
+- Stream error handling with server switching
 - 100% legal sources only (public domain films, official trailers, CC demo streams)
 
 ## Getting started

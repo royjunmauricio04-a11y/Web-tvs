@@ -9,8 +9,8 @@ A modern, multi-catalog streaming hub for the web: a tribute to the DAVY mobile 
 | Catalog | Source | Playback |
 | --- | --- | --- |
 | Anime | Jikan API (MyAnimeList): seasonal, top rated, airing now | CC-licensed demo streams (Blender open movies) |
-| Movies | iTunes trending top 50 + 20-topic featured search | Official iTunes trailers + demo streams |
-| Series | iTunes trending TV seasons + 20-topic featured search | Official iTunes trailers + demo streams |
+| Movies | iTunes trending top 50 + 20-topic featured search + optional TMDB trending | Official iTunes trailers + demo streams |
+| Series | iTunes trending TV seasons + 20-topic featured search + optional TMDB trending | Official iTunes trailers + demo streams |
 | Free Movies | Internet Archive, 48 public domain films | Full public domain films, streamed legally |
 | K-Drama | Curated list | Demo streams |
 | C-Drama | Curated list | Demo streams |
@@ -18,15 +18,27 @@ A modern, multi-catalog streaming hub for the web: a tribute to the DAVY mobile 
 ## Features
 
 - Modern glass top navigation + mobile bottom nav
-- Netflix-style hero carousel with auto-rotate on the home page
-- Horizontal scroll rows with arrow navigation, including real iTunes trending rows (top movies and TV seasons)
+- Netflix-style hero carousel with auto-rotate and real backdrops (TMDB)
+- Horizontal scroll rows with arrow navigation, including real iTunes trending rows and optional TMDB trending rows
 - Continue watching: watch history with resume position and progress bars
 - Watchlist with toast notifications
 - Custom video player: playback speed (0.75x to 2x), skip 10s, volume, fullscreen, keyboard shortcuts
 - Search across all six catalogs
+- Settings modal: optional free TMDB API key and watch history management
+- PWA: installable to your home screen or desktop
 - Fast: compiled Tailwind CSS (no CDN), small poster thumbnails, in-memory caching, instant detail pages
 - Stream error handling with server switching
 - 100% legal sources only (public domain films, official trailers, CC demo streams)
+
+## TMDB key (optional, free)
+
+TMDB unlocks the weekly trending rows and real movie backdrops:
+
+1. Create a free account at [themoviedb.org](https://www.themoviedb.org/).
+2. Open Settings > API and copy your API Key (v3).
+3. In the app, open **Settings** (top right) and paste the key.
+
+Without a key the app works normally; the TMDB rows are simply hidden.
 
 ## Getting started
 
@@ -78,7 +90,8 @@ Notes:
 - framer-motion for transitions
 - lucide-react icons
 - react-router-dom v6
+- Optional TMDB metadata (free API key, set in-app)
 
 ## Disclaimer
 
-TVS only streams content that is legal to redistribute: public domain films from the Internet Archive, official trailers via iTunes, and Creative Commons demo streams (Blender open movies). Metadata comes from public APIs (Jikan/MyAnimeList, iTunes Search and RSS, Internet Archive).
+TVS only streams content that is legal to redistribute: public domain films from the Internet Archive, official trailers via iTunes, and Creative Commons demo streams (Blender open movies). Metadata comes from public APIs (Jikan/MyAnimeList, iTunes Search and RSS, Internet Archive, and optionally TMDB).

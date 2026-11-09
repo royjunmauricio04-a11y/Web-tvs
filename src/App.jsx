@@ -128,6 +128,7 @@ function thumbFor(item) {
   const u = item.image;
   if (!u) return artFor(item);
   if (/\/600x600bb\./.test(u)) return u.replace("/600x600bb.", "/200x200bb.");
+  if (/\/t\/p\/w500\//.test(u)) return u.replace("/w500/", "/w200/");
   if (/l\.jpg$/.test(u)) return u.replace(/l\.jpg$/, "t.jpg");
   return u;
 }
@@ -410,6 +411,50 @@ async function trendingSeasons() {
   return trendCache.get("series");
 }
 
+/* ---------- TMDB (optional, free key set in Settings) ---------- */
+async function tmdb(path) {
+  const key = store.get("tvs-tmdb-key");
+  if (!key) return null;
+  try {
+    const r = await fetch(`https://api.themoviedb.org/3${path}${path.includes("?") ? "&" : "?"}api_key=${encodeURIComponent(key)}`);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
+function normTmdb(r, kind) {
+  const isMovie = kind === "movie";
+  return {
+    id: `tmdb-${r.id}`, catalog: isMovie ? "movies" : "series",
+    title: r.title || r.name || "Untitled", altTitle: null,
+    image: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : null,
+    backdrop: r.backdrop_path ? `https://image.tmdb.org/t/p/w1280${r.backdrop_path}` : null,
+    score: r.vote_average ? Math.round(r.vote_average * 10) / 10 : null,
+    genres: [], episodes: isMovie ? 1 : 10,
+    year: (r.release_date || r.first_air_date || "").slice(0, 4) || null,
+    type: isMovie ? "Movie" : "TV Series",
+    synopsis: r.overview || "No synopsis available yet.",
+    video: null,
+  };
+}
+
+const tmdbTrendCache = new Map();
+async function tmdbTrending(cat) {
+  if (!store.get("tvs-tmdb-key")) return null;
+  if (tmdbTrendCache.has(cat)) return tmdbTrendCache.get(cat);
+  const p = (async () => {
+    const kind = cat === "movies" ? "movie" : "tv";
+    const res = await tmdb(`/trending/${kind}/week`);
+    const items = res && Array.isArray(res.results) ? res.results.map((r) => remember(normTmdb(r, kind))).filter((x) => x.image) : [];
+    return items.length >= 6 ? items : null;
+  })();
+  tmdbTrendCache.set(cat, p);
+  p.catch(() => {});
+  return p;
+}
+
 function getFeatured(cat) {
   if (cat !== "movies" && cat !== "series" && cat !== "free") return Promise.resolve([]);
   if (!featuredCache.has(cat)) {
@@ -516,11 +561,30 @@ async function fetchDetail(cat, id) {
     if (res && res.data) a = normAnime(res.data);
     else a = MOCK_ANIME_BY_ID.get(String(id)) || null;
   } else if (cat === "movies" || cat === "series") {
-    const res = await itunes(`/lookup?id=${id}&country=US`);
-    const r = res && Array.isArray(res.results) && res.results[0];
-    if (r && r.kind === "feature-movie") a = normMovie(r);
-    else if (r && r.collectionType === "TV Season") a = normSeason(r);
-    if (!a) a = knownItems.get(key) || null;
+    if (/^tmdb-/.test(id)) {
+      const kind = cat === "movies" ? "movie" : "tv";
+      const num = id.slice(5);
+      const d = await tmdb(`/${kind}/${num}`);
+      if (d && (d.id || d.title || d.name)) {
+        const it = normTmdb(d, kind);
+        it.genres = (d.genres || []).map((g) => g.name).slice(0, 5);
+        it.episodes = cat === "series" ? (d.number_of_episodes || 10) : 1;
+        const s = await itunes(`/search?term=${encodeURIComponent(it.title)}&limit=5&country=US`);
+        const m = s && Array.isArray(s.results) ? s.results.find((x) => (cat === "movies" ? x.kind === "feature-movie" : x.collectionType === "TV Season")) : null;
+        if (m) {
+          it.video = m.previewUrl || null;
+          if (!it.image) it.image = bigArt(m.artworkUrl100);
+        }
+        a = it;
+      }
+      if (!a) a = knownItems.get(key) || null;
+    } else {
+      const res = await itunes(`/lookup?id=${id}&country=US`);
+      const r = res && Array.isArray(res.results) && res.results[0];
+      if (r && r.kind === "feature-movie") a = normMovie(r);
+      else if (r && r.collectionType === "TV Season") a = normSeason(r);
+      if (!a) a = knownItems.get(key) || null;
+    }
   } else if (cat === "free") {
     const res = await ia(`/metadata/${encodeURIComponent(id)}`);
     if (res && res.metadata && res.metadata.title) {
@@ -799,7 +863,7 @@ function Hero({ items, loading }) {
   }
   if (slides.length === 0) return null;
   const it = slides[i % slides.length];
-  const img = artFor(it);
+  const img = it.backdrop || artFor(it);
   const saved = wl.has(it.catalog, it.id);
   const isMovie = it.catalog === "movies";
   const cta = it.catalog === "free" ? "Watch full movie" : isMovie ? "Watch trailer" : "Watch Episode 1";
@@ -941,7 +1005,7 @@ function HomePage() {
         return;
       }
       if (cat === "movies" || cat === "series") {
-        const [tr, feat] = await Promise.all([cat === "movies" ? trendingMovies() : trendingSeasons(), getFeatured(cat)]);
+        const [tr, feat, tmdbRow] = await Promise.all([cat === "movies" ? trendingMovies() : trendingSeasons(), getFeatured(cat), tmdbTrending(cat)]);
         if (!alive) return;
         const trendItems = (tr || []).filter(Boolean);
         const all = (feat || []).filter(Boolean);
@@ -949,6 +1013,9 @@ function HomePage() {
         const fresh = all.filter((x) => !trendIds.has(String(x.id)));
         setList(trendItems.length ? trendItems : all);
         const extra = [];
+        if (tmdbRow && tmdbRow.length) {
+          extra.push({ title: "Trending this week (TMDB)", items: tmdbRow.slice(0, 20) });
+        }
         if (trendItems.length && fresh.length) {
           extra.push({ title: cat === "movies" ? "Featured movies" : "Featured series", items: fresh.slice(0, 15) });
         }
@@ -1120,7 +1187,7 @@ function DetailPage() {
       </button>
       <div className="relative overflow-hidden rounded-2xl ring-1 ring-white/10">
         <div className="absolute inset-0">
-          <img src={img} alt="" className="h-full w-full scale-110 object-cover blur-2xl opacity-30" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+          <img src={item.backdrop || img} alt="" className="h-full w-full scale-110 object-cover blur-2xl opacity-30" onError={(e) => { e.currentTarget.style.display = "none"; }} />
           <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/80 to-slate-950/40" />
         </div>
         <div className="relative flex flex-col gap-6 p-6 sm:flex-row">
@@ -1662,6 +1729,8 @@ function Shell() {
   });
   const [hist, setHist] = useState(loadHistory);
   const [toasts, setToasts] = useState([]);
+  const [showSettings, setShowSettings] = useState(false);
+  const [tmdbKeyInput, setTmdbKeyInput] = useState(() => store.get("tvs-tmdb-key") || "");
   const toastId = useRef(0);
 
   const pushToast = useCallback((msg) => {
@@ -1699,6 +1768,7 @@ function Shell() {
         return next;
       });
     },
+    clear: () => { store.set("tvs-history", "[]"); setHist([]); },
   }), [hist]);
 
   useEffect(() => {
@@ -1747,6 +1817,13 @@ function Shell() {
                 >
                   <Clapperboard className="h-4 w-4" />
                 </button>
+                <button
+                  onClick={() => setShowSettings(true)}
+                  className="rounded-full bg-slate-800/80 px-3.5 py-1.5 text-xs font-semibold text-slate-300 ring-1 ring-white/10 transition-colors hover:text-white"
+                  title="Settings"
+                >
+                  Settings
+                </button>
               </div>
             </div>
           </header>
@@ -1780,6 +1857,55 @@ function Shell() {
             <NavItem to="/search" icon={<Search className="h-5 w-5" />} label="" />
             <NavItem to="/watchlist" icon={<Bookmark className="h-5 w-5" />} label="" badge={wlKeys.size || null} />
           </nav>
+
+          {showSettings && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setShowSettings(false)}>
+              <div className="w-full max-w-md rounded-2xl bg-slate-900 p-6 ring-1 ring-white/10" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between">
+                  <h2 className="text-lg font-bold text-white">Settings</h2>
+                  <button onClick={() => setShowSettings(false)} className="rounded-full p-1.5 text-slate-400 transition-colors hover:bg-slate-800 hover:text-white">
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+                <label className="mt-4 block text-sm font-semibold text-slate-300">TMDB API key (free, optional)</label>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  Create a free account at themoviedb.org, open Settings there and copy your API Key (v3). This unlocks the weekly trending rows with real backdrops and posters.
+                </p>
+                <input
+                  value={tmdbKeyInput}
+                  onChange={(e) => setTmdbKeyInput(e.target.value)}
+                  placeholder="Paste your TMDB API key"
+                  className="mt-3 w-full rounded-xl bg-slate-800 px-3 py-2.5 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-violet-500/60"
+                />
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => {
+                      store.set("tvs-tmdb-key", tmdbKeyInput.trim());
+                      pushToast(tmdbKeyInput.trim() ? "TMDB key saved, reloading" : "TMDB key cleared, reloading");
+                      setTimeout(() => window.location.reload(), 900);
+                    }}
+                    className="rounded-full bg-violet-600 px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-violet-500"
+                  >
+                    Save key
+                  </button>
+                  <button
+                    onClick={() => { store.set("tvs-tmdb-key", ""); setTmdbKeyInput(""); pushToast("TMDB key removed, reloading"); setTimeout(() => window.location.reload(), 900); }}
+                    className="rounded-full bg-slate-800 px-4 py-2 text-xs font-bold text-slate-300 ring-1 ring-white/10 transition-colors hover:bg-slate-700"
+                  >
+                    Remove key
+                  </button>
+                </div>
+                <div className="mt-6 border-t border-white/5 pt-4">
+                  <button
+                    onClick={() => { histApi.clear(); pushToast("Watch history cleared"); }}
+                    className="text-sm font-semibold text-rose-300 transition-colors hover:text-rose-200"
+                  >
+                    Clear watch history
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="pointer-events-none fixed bottom-20 right-4 z-50 flex flex-col items-end gap-2 md:bottom-6">
             <AnimatePresence>

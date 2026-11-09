@@ -1,9 +1,19 @@
 {
   "name": "TVS: Anime, Movies & Drama Hub",
   "short_name": "TVS",
+  "description": "A modern multi-catalog streaming hub for anime, movies, series, K-drama, C-drama, and public domain films. 100% legal playback.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "any",
   "background_color": "#020617",
-  "theme_color": "#7c3aed",
-  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+  "theme_color": "#020617",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
 }

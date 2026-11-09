@@ -48,6 +48,22 @@ npm start
 
 The zero-dependency Node server (`server.js`) serves the built app from `dist/` with SPA fallback on port 3000 (or `$PORT`).
 
+## Deploy to Render
+
+This repo is ready for [Render](https://render.com) with zero extra config (`render.yaml` is included).
+
+1. Sign up at [render.com](https://render.com) (Sign in with GitHub).
+2. In GitHub, grant Render access to this private repo: **Settings > Applications > Render**, or just pick it when Render asks for repo access.
+3. On your Render dashboard, click **New + > Blueprint**, choose the **Web-tvs** repo, and click **Apply**.
+   - (Or: **New + > Web Service**, pick the repo. The build and start commands are auto-filled from `render.yaml`.)
+4. Wait for the build to finish (about a minute). Your app goes live at `https://web-tvs.onrender.com`.
+
+Notes:
+
+- The build command installs dev dependencies explicitly (`--include=dev`) because Render sets `NODE_ENV=production`.
+- On the free plan, the service sleeps after ~15 minutes of inactivity. The first visit after idle takes about 30 to 60 seconds to wake up. Ping it periodically (for example with a free cron service) if you want it always on.
+- Every push to `main` triggers an automatic redeploy.
+
 ## Keyboard shortcuts (player)
 
 - Space / K: play or pause

@@ -52,6 +52,6 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`TVS running at http://localhost:${PORT} (serving ./dist)`);
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`TVS running on port ${PORT} (serving ./dist)`);
 });
